@@ -1,16 +1,19 @@
 import subprocess
 from math import ceil, floor, log
 from typing import Optional
+import requests
 from pyrogram import Client, filters, enums
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message, CallbackQuery
 from pyrogram.errors.exceptions import MessageIdInvalid
-from config import API_ID, API_HASH, TG_TOKEN, AUTHORIZED_IDS
+from requests import HTTPError
+from config import API_ID, API_HASH, TG_TOKEN, AUTHORIZED_IDS, NGROK_URL
 from logging2 import Logger
 import psutil
 
 app = Client("home_ant_bot", api_id=API_ID, api_hash=API_HASH, bot_token=TG_TOKEN)
 logger = Logger(__name__)
 system_info_filter = filters.create(lambda _, __, query: query.data.startswith("sys_info"))
+ngrok_info_filter = filters.create(lambda _, __, query: query.data.startswith("ng_info"))
 
 
 def convert_size(size_bytes) -> str:
@@ -79,4 +82,33 @@ def sys_info(client: Client, callback_query: CallbackQuery) -> None:
                           callback_query.message.id,
                           txt,
                           parse_mode=Optional[enums.ParseMode.MARKDOWN],
+                          reply_markup=button)
+
+
+@app.on_callback_query(filters=ngrok_info_filter)
+def ngrok_info_callback(client: Client, callback_query: CallbackQuery) -> None:
+    logger.info(f"ng_info cmd sent by: {callback_query.from_user.first_name}")
+    button = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Menu", "menu")]])
+    msg = ""
+    status_count = 0
+    logger.info("fetching ngrok info")
+    for url in NGROK_URL:
+        try:
+            response = requests.get(url, headers={'Content-Type': 'application/json'})
+        except (ConnectionError, HTTPError):
+            logger.error(f'failed to connect: {url}')
+        else:
+            if response.ok:
+                status_count += 1
+                tunnels = response.json()["tunnels"]
+                for tunnel in tunnels:
+                    msg += f'🚀 <b>Name:</b> <code>{tunnel["name"]}</code>\n'
+                    msg += f'⚡ <b>URL:</b> {tunnel["public_url"]}\n\n'
+            response.close()
+    if status_count == 0:
+        msg = '‼️ <b>Failed to get api response</b>'
+    app.edit_message_text(callback_query.from_user.id,
+                          callback_query.message.id,
+                          msg,
+                          parse_mode=Optional[enums.ParseMode.HTML],
                           reply_markup=button)

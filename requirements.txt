@@ -3,3 +3,4 @@ logging2
 psutil
 TgCrypto
 requests==2.28.1
+paho-mqtt==1.6.1

@@ -1,7 +1,7 @@
 import subprocess
 from math import ceil, floor, log
 from typing import Optional
-from pyrogram import Client, filters
+from pyrogram import Client, filters, enums
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message, CallbackQuery
 from pyrogram.errors.exceptions import MessageIdInvalid
 from config import API_ID, API_HASH, TG_TOKEN, AUTHORIZED_IDS
@@ -24,8 +24,8 @@ def convert_size(size_bytes) -> str:
 
 
 def send_menu(message, chat) -> None:
-    buttons = [[InlineKeyboardButton("⛰️ Ngrok", "")], [InlineKeyboardButton("🖥️ System Info", "sys_info")],
-               [InlineKeyboardButton("☀️ Solar Status", "")]]
+    buttons = [[InlineKeyboardButton("⛰️ Ngrok", "ng_info")], [InlineKeyboardButton("🖥️ System Info", "sys_info")],
+               [InlineKeyboardButton("☀️ Solar Status", "sol_info")]]
     try:
         app.edit_message_text(chat, message, text="Home-Ant", reply_markup=InlineKeyboardMarkup(buttons))
     except MessageIdInvalid:
@@ -78,5 +78,5 @@ def sys_info(client: Client, callback_query: CallbackQuery) -> None:
     app.edit_message_text(callback_query.from_user.id,
                           callback_query.message.id,
                           txt,
-                          parse_mode=Optional["markdown"],
+                          parse_mode=Optional[enums.ParseMode.MARKDOWN],
                           reply_markup=button)

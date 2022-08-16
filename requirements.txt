@@ -1,0 +1,3 @@
+Pyrogram==2.0.41
+logging2
+psutil

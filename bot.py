@@ -1,7 +1,6 @@
 import subprocess
 import time
 from math import ceil, floor, log
-from typing import Optional
 import requests
 from pyrogram import Client, filters, enums
 from pyrogram.errors import PeerIdInvalid
@@ -93,7 +92,7 @@ def sys_info(client: Client, callback_query: CallbackQuery) -> None:
     app.edit_message_text(callback_query.from_user.id,
                           callback_query.message.id,
                           txt,
-                          parse_mode=Optional[enums.ParseMode.MARKDOWN],
+                          parse_mode=enums.ParseMode.MARKDOWN,
                           reply_markup=button)
 
 
@@ -122,6 +121,7 @@ def ngrok_info_callback(client: Client, callback_query: CallbackQuery) -> None:
     app.edit_message_text(callback_query.from_user.id,
                           callback_query.message.id,
                           msg,
-                          parse_mode=Optional[enums.ParseMode.HTML],
+                          parse_mode=enums.ParseMode.HTML,
                           reply_markup=button)
+
 

@@ -1,8 +1,10 @@
 import subprocess
+import time
 from math import ceil, floor, log
 from typing import Optional
 import requests
 from pyrogram import Client, filters, enums
+from pyrogram.errors import PeerIdInvalid
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message, CallbackQuery
 from pyrogram.errors.exceptions import MessageIdInvalid
 from requests import HTTPError
@@ -24,6 +26,16 @@ def convert_size(size_bytes) -> str:
     p = pow(1024, i)
     s = round(size_bytes / p, 2)
     return "%s %s" % (s, size_name[i])
+
+
+def send_startup_msg() -> None:
+    time.sleep(5)
+    logger.info("sending startup msg")
+    for user_id in AUTHORIZED_IDS:
+        try:
+            app.send_message(user_id, "🤖 <b>Bot Started</b>", parse_mode=enums.ParseMode.HTML)
+        except PeerIdInvalid:
+            logger.error(f"Failed to send msg to {user_id}")
 
 
 def send_menu(message, chat) -> None:
@@ -112,3 +124,4 @@ def ngrok_info_callback(client: Client, callback_query: CallbackQuery) -> None:
                           msg,
                           parse_mode=Optional[enums.ParseMode.HTML],
                           reply_markup=button)
+

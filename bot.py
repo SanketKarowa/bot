@@ -1,12 +1,12 @@
 import subprocess
 import time
 from math import ceil, floor, log
+import pyrogram.errors
 import requests
 from pyrogram import Client, filters, enums
 from pyrogram.errors import PeerIdInvalid
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message, CallbackQuery
 from pyrogram.errors.exceptions import MessageIdInvalid
-from requests import HTTPError
 from config import API_ID, API_HASH, TG_TOKEN, AUTHORIZED_IDS, NGROK_URL, MQTT_HOST, MQTT_PORT
 from logging2 import Logger
 import psutil
@@ -19,13 +19,28 @@ system_info_filter = filters.create(lambda _, __, query: query.data.startswith("
 ngrok_info_filter = filters.create(lambda _, __, query: query.data.startswith("ng_info"))
 sol_info_filter = filters.create(lambda _, __, query: query.data.startswith("sol_info"))
 menu_filter = filters.create(lambda _, __, query: query.data.startswith("menu"))
+MENU_BTN = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Menu", "menu")]])
 BATT_TOPIC = "/esp8266/batt"
+BATT2_TOPIC = "/esp8266/batt2"
+BATT3_TOPIC = "/esp8266/batt3"
 RELAY1_TOPIC = "/status/r1"
 RELAY2_TOPIC = "/status/r2"
+RELAY3_TOPIC = "/status/r3"
 MAINS_TOPIC = "/esp8266/main"
+MAINS_ON_RESP = "MAINS ON"
+MAINS_OFF_RESP = "MAINS OFF"
+RELAY1_ON_RESP = "11"
+RELAY1_OFF_RESP = "10"
+RELAY2_ON_RESP = "21"
+RELAY2_OFF_RESP = "20"
+RELAY3_ON_RESP = "31"
+RELAY3_OFF_RESP = "30"
 MSG_ID = None
 CHAT_ID = None
+CALLBACK_QUERY_ID = None
 MQTT_DATA = {}
+MQTT_ON_MSG_DELAY = 2
+STARTUP_MSG_DELAY = 10
 
 def convert_size(size_bytes) -> str:
     if size_bytes == 0:
@@ -38,13 +53,12 @@ def convert_size(size_bytes) -> str:
 
 
 def send_startup_msg() -> None:
-    time.sleep(5)
+    time.sleep(STARTUP_MSG_DELAY)
     logger.info("sending startup msg")
-    for user_id in AUTHORIZED_IDS:
-        try:
-            app.send_message(user_id, "🤖 <b>Bot Started</b>", parse_mode=enums.ParseMode.HTML)
-        except PeerIdInvalid:
-            logger.error(f"Failed to send msg to {user_id}")
+    try:
+        app.send_message(AUTHORIZED_IDS[0], "🤖 <b>Bot Started</b>", parse_mode=enums.ParseMode.HTML)
+    except Exception as e:
+        logger.error(f"Failed to send startup msg: {str(e)}")
 
 
 def send_menu(message, chat) -> None:
@@ -52,32 +66,39 @@ def send_menu(message, chat) -> None:
                [InlineKeyboardButton("☀️ Solar Status", "sol_info")]]
     try:
         app.edit_message_text(chat, message, text="Home-Ant", reply_markup=InlineKeyboardMarkup(buttons))
-    except MessageIdInvalid:
+    except (MessageIdInvalid, pyrogram.errors.MessageAuthorRequired):
         app.send_message(chat, text="Home-Ant", reply_markup=InlineKeyboardMarkup(buttons))
+    except PeerIdInvalid:
+        logger.error(f"error sending menu PeerIdInvalid: {chat}")
 
 
 @app.on_callback_query(filters=menu_filter)
 def menu(client: Client, callback_query: CallbackQuery) -> None:
-    send_menu(callback_query.from_user.id, callback_query.message.id)
     if mqttc.is_connected():
         logger.info(f"disconnecting MQTT server: {MQTT_HOST}:{MQTT_PORT}")
         mqttc.disconnect()
+        mqttc.loop_stop()
+    send_menu(callback_query.message.id, callback_query.from_user.id)
 
 
 @app.on_message(filters=filters.command("start"))
 def start_command(client: Client, message: Message) -> None:
     """Start the bot."""
-    logger.info(f"start command sent by: {message.from_user.first_name}")
-    if message.from_user.id in AUTHORIZED_IDS:
-        send_menu(message.id, message.chat.id)
+    try:
+        uid = message.from_user.id
+        logger.info(f"start command sent by: {message.from_user.first_name}")
+    except AttributeError:
+        uid = message.chat.id
+        logger.info(f"start command sent by: {uid}")
+    if uid in AUTHORIZED_IDS:
+        send_menu(message.id, uid)
     else:
-        app.send_message(message.chat.id, "You are not authorized to use this bot")
+        app.send_message(uid, "You are not authorized to use this bot")
 
 
 @app.on_callback_query(filters=system_info_filter)
 def sys_info(client: Client, callback_query: CallbackQuery) -> None:
     logger.info(f"sys info command sent by: {callback_query.from_user.first_name}")
-    button = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Menu", "menu")]])
     try:
         temp = psutil.sensors_temperatures()
         cpu_temp = ""
@@ -111,20 +132,19 @@ def sys_info(client: Client, callback_query: CallbackQuery) -> None:
                           callback_query.message.id,
                           txt,
                           parse_mode=enums.ParseMode.MARKDOWN,
-                          reply_markup=button)
+                          reply_markup=MENU_BTN)
 
 
 @app.on_callback_query(filters=ngrok_info_filter)
 def ngrok_info_callback(client: Client, callback_query: CallbackQuery) -> None:
     logger.info(f"ng_info cmd sent by: {callback_query.from_user.first_name}")
-    button = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Menu", "menu")]])
     msg = ""
     status_count = 0
     logger.info("fetching ngrok info")
     for url in NGROK_URL:
         try:
             response = requests.get(url, headers={'Content-Type': 'application/json'})
-        except (ConnectionError, HTTPError):
+        except (requests.ConnectionError, requests.HTTPError):
             logger.error(f'failed to connect: {url}')
         else:
             if response.ok:
@@ -135,32 +155,67 @@ def ngrok_info_callback(client: Client, callback_query: CallbackQuery) -> None:
                     msg += f'⚡ <b>URL:</b> {tunnel["public_url"]}\n\n'
             response.close()
     if status_count == 0:
-        msg = '‼️ <b>Failed to get api response</b>'
-    app.edit_message_text(callback_query.from_user.id,
-                          callback_query.message.id,
-                          msg,
-                          parse_mode=enums.ParseMode.HTML,
-                          reply_markup=button)
+        app.answer_callback_query(callback_query.id, '‼️ Failed to get api response', True)
+    else:
+        app.edit_message_text(callback_query.from_user.id, callback_query.message.id, msg, parse_mode=enums.ParseMode.HTML, reply_markup=MENU_BTN)
 
 
 def on_connect(client, userdata, flags, rc):
     logger.info(f"Connected with result code: {str(rc)}")
     try:
-        client.subscribe([(BATT_TOPIC, 0), (MAINS_TOPIC, 0), (RELAY1_TOPIC, 0), (RELAY2_TOPIC, 0)])
+        app.answer_callback_query(CALLBACK_QUERY_ID, f"Connected to {MQTT_HOST}:{MQTT_PORT}")
+        client.subscribe([(BATT_TOPIC, 0), (BATT2_TOPIC, 0), (BATT3_TOPIC, 0), (MAINS_TOPIC, 0),
+                          (RELAY1_TOPIC, 0), (RELAY2_TOPIC, 0), (RELAY3_TOPIC, 0)])
     except Exception as err:
-        logger.error(f"Error while subscribing: {str(err)}")
+        msg = f"Error in on_connect: {str(err)}"
+        logger.error(msg)
 
 
 def on_message(client, userdata, msg):
-    logger.info(f"Topic: {msg.topic} Payload: {str(msg.payload)}")
-    button = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Menu", "menu")]])
+    time.sleep(MQTT_ON_MSG_DELAY)
     global MQTT_DATA
-    MQTT_DATA[msg.topic] = str(msg.payload)
+    global MSG_ID
+    MQTT_DATA[msg.topic] = msg.payload.decode()
     text = ""
     try:
         for topic in MQTT_DATA:
-            text += f"<b>{topic}</b>: <code>{MQTT_DATA.get(topic)}</code>\n"
-        app.edit_message_text(CHAT_ID, MSG_ID, text, parse_mode=enums.ParseMode.HTML, reply_markup=button)
+            resp = MQTT_DATA.get(topic)
+            if topic == MAINS_TOPIC:
+                text += f"⚡ <b>{topic}</b>: "
+                if resp == MAINS_ON_RESP:
+                    text += "🟢\n\n"
+                if resp == MAINS_OFF_RESP:
+                    text += "🔴\n\n"
+            elif topic == RELAY1_TOPIC:
+                text += f"⚙ <b>{topic}</b>: "
+                if resp == RELAY1_ON_RESP:
+                    text += "🟢\n\n"
+                if resp == RELAY1_OFF_RESP:
+                    text += "🔴\n\n"
+            elif topic == RELAY2_TOPIC:
+                text += f"⚙ <b>{topic}</b>: "
+                if resp == RELAY2_ON_RESP:
+                    text += "🟢\n\n"
+                if resp == RELAY2_OFF_RESP:
+                    text += "🔴\n\n"
+            elif topic == RELAY3_TOPIC:
+                text += f"⚙ <b>{topic}</b>: "
+                if resp == RELAY3_ON_RESP:
+                    text += "🟢\n\n"
+                if resp == RELAY3_OFF_RESP:
+                    text += "🔴\n\n"
+            elif topic == BATT_TOPIC:
+                text += f"🔋 <b>{topic}</b>: <code>{resp}</code>\n\n"
+            elif topic == BATT2_TOPIC:
+                text += f"🔋 <b>{topic}</b>: <code>{resp}</code>\n\n"
+            elif topic == BATT3_TOPIC:
+                text += f"🔋 <b>{topic}</b>: <code>{resp}</code>\n\n"
+            else:
+                text += f"<code>{resp}</code>\n\n"
+            logger.info(f"{topic}: {resp}")
+        app.edit_message_text(CHAT_ID, MSG_ID, text, parse_mode=enums.ParseMode.HTML, reply_markup=MENU_BTN)
+    except pyrogram.errors.BadRequest:
+        pass
     except Exception as e:
         logger.error(f"error sending topic payload info: {str(e)}")
 
@@ -173,12 +228,16 @@ mqttc.on_message = on_message
 def sol_info_callback(client: Client, callback_query: CallbackQuery) -> None:
     global MSG_ID
     global CHAT_ID
+    global CALLBACK_QUERY_ID
     MSG_ID = callback_query.message.id
     CHAT_ID = callback_query.from_user.id
+    CALLBACK_QUERY_ID = callback_query.id
     try:
         if not mqttc.is_connected():
             logger.info(f"connecting to MQTT server: {MQTT_HOST}:{MQTT_PORT}")
             mqttc.connect(host=MQTT_HOST, port=MQTT_PORT)
+            mqttc.loop_start()
     except Exception as err:
-        logger.error(f"error while connecting to MQTT server: {str(err)}")
-
+        msg = f"error while connecting to MQTT server: {str(err)}"
+        app.answer_callback_query(CALLBACK_QUERY_ID, msg, True)
+        logger.error(msg)
